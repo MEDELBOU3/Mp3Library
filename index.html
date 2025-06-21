@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hören ‑ Advanced Audio Library</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Font Awesome for icons -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet"/>
+
+  <style>
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding-bottom: 5rem; /* leave room for player */
+    }
+    .navbar {
+      background: #161b22;
+    }
+    .folder-toggle,
+    .file-item {
+      cursor: pointer;
+      user-select: none;
+    }
+    .folder-toggle:hover,
+    .file-item:hover {
+      color: #58a6ff;
+    }
+    #folderPane {
+      max-height: calc(100vh - 4rem);
+      overflow-y: auto;
+      border-right: 1px solid rgba(255,255,255,0.1);
+      padding-right: .75rem;
+    }
+    #fileList {
+      max-height: calc(100vh - 10rem);
+      overflow-y: auto;
+    }
+    footer {
+      border-top: 1px solid rgba(255,255,255,0.1);
+      padding: .25rem 1rem;
+    }
+    .list-group-item {
+      background: transparent;
+      color: inherit;
+    }
+    .list-group-item.active {
+      background: #238636;
+      border-color: #238636;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark px-3">
+    <a class="navbar-brand fw-semibold" href="#"><i class="fa-solid fa-headphones"></i> Hören Library</a>
+    <div class="ms-auto d-flex align-items-center gap-2">
+      <label class="btn btn-primary mb-0" title="Load a directory containing your MP3 files">
+        <i class="fa-solid fa-folder-open"></i> Load Library
+        <input type="file" id="dirInput" hidden webkitdirectory multiple accept="audio/mpeg">
+      </label>
+      <input type="text" id="searchInput" placeholder="Search…" class="form-control form-control-sm bg-dark border-secondary text-white" style="max-width: 240px;">
+    </div>
+  </nav>
+
+  <div class="container-fluid mt-3">
+    <div class="row">
+      <aside class="col-12 col-md-3" id="folderPane"></aside>
+      <main class="col-12 col-md-9">
+        <h5 class="mb-3"><i class="fa-solid fa-list"></i> Playlist</h5>
+        <ul class="list-group" id="fileList"></ul>
+      </main>
+    </div>
+  </div>
+
+  <footer class="fixed-bottom bg-dark">
+    <audio id="audioPlayer" class="w-100" controls preload="none"></audio>
+  </footer>
+
+  <script>
+    // --- Utility to build a nested directory tree from File objects ---
+    function buildTree(files) {
+      const root = { dirs: {}, files: [] };
+      for (const f of files) {
+        if (!f.type.startsWith('audio')) continue; // only audio
+        const parts = (f.webkitRelativePath || f.name).split('/');
+        let node = root;
+        parts.forEach((part, idx) => {
+          if (idx === parts.length - 1) {
+            node.files.push({ name: part, file: f });
+          } else {
+            node.dirs[part] = node.dirs[part] || { dirs: {}, files: [] };
+            node = node.dirs[part];
+          }
+        });
+      }
+      return root;
+    }
+
+    // --- Render folder tree ---
+    function renderTree(node, container, path = '') {
+      container.innerHTML = '';
+      const ul = document.createElement('ul');
+      ul.classList.add('list-unstyled');
+      container.appendChild(ul);
+
+      const renderNode = (n, parentUl, currentPath) => {
+        // directories first
+        Object.entries(n.dirs).sort(([a], [b]) => a.localeCompare(b)).forEach(([dirName, dirNode]) => {
+          const li = document.createElement('li');
+          li.innerHTML = `<span class="folder-toggle"><i class="fa-solid fa-folder"></i> ${dirName}</span>`;
+          const subUl = document.createElement('ul');
+          subUl.classList.add('list-unstyled', 'ms-3', 'collapse');
+          li.appendChild(subUl);
+          parentUl.appendChild(li);
+
+          li.querySelector('.folder-toggle').addEventListener('click', () => {
+            subUl.classList.toggle('show');
+          });
+
+          renderNode(dirNode, subUl, currentPath + dirName + '/');
+        });
+        // files
+        n.files.sort((a, b) => a.name.localeCompare(b.name)).forEach(f => {
+          const li = document.createElement('li');
+          li.innerHTML = `<span class="file-item"><i class="fa-solid fa-music"></i> ${f.name}</span>`;
+          li.querySelector('.file-item').addEventListener('click', () => addToPlaylist(f));
+          parentUl.appendChild(li);
+        });
+      };
+
+      renderNode(node, ul, path);
+    }
+
+    // --- Playlist management ---
+    const playlist = [];
+    let currentIndex = -1;
+    const fileListEl = document.getElementById('fileList');
+    const player = document.getElementById('audioPlayer');
+
+    function addToPlaylist(entry) {
+      playlist.push(entry);
+      renderPlaylist();
+      if (currentIndex === -1) playTrack(0);
+    }
+
+    function renderPlaylist() {
+      fileListEl.innerHTML = '';
+      playlist.forEach((p, idx) => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-center' + (idx === currentIndex ? ' active' : '');
+        li.innerHTML = `<span>${p.name}</span><button class="btn btn-sm btn-outline-danger" title="Remove">&times;</button>`;
+        li.querySelector('button').addEventListener('click', e => {
+          e.stopPropagation();
+          if (idx === currentIndex) {
+            player.pause();
+            player.src = '';
+            currentIndex = -1;
+          }
+          playlist.splice(idx, 1);
+          renderPlaylist();
+        });
+        li.addEventListener('click', () => playTrack(idx));
+        fileListEl.appendChild(li);
+      });
+    }
+
+    function playTrack(idx) {
+      if (idx < 0 || idx >= playlist.length) return;
+      currentIndex = idx;
+      const source = URL.createObjectURL(playlist[idx].file);
+      player.src = source;
+      player.play();
+      renderPlaylist();
+    }
+
+    player.addEventListener('ended', () => {
+      if (currentIndex + 1 < playlist.length) {
+        playTrack(currentIndex + 1);
+      }
+    });
+
+    // --- Search ---
+    const searchInput = document.getElementById('searchInput');
+    searchInput.addEventListener('input', () => {
+      const term = searchInput.value.toLowerCase();
+      document.querySelectorAll('#folderPane .file-item').forEach(el => {
+        const match = el.textContent.toLowerCase().includes(term);
+        el.parentElement.style.display = match ? '' : 'none';
+      });
+    });
+
+    // --- Load library ---
+    document.getElementById('dirInput').addEventListener('change', e => {
+      if (!e.target.files.length) return;
+      const tree = buildTree(Array.from(e.target.files));
+      renderTree(tree, document.getElementById('folderPane'));
+      // reset previous session
+      playlist.length = 0;
+      currentIndex = -1;
+      renderPlaylist();
+      player.pause();
+      player.src = '';
+    });
+  </script>
+</body>
+</html>
